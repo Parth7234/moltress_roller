@@ -1,0 +1,105 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+
+struct Node{
+    int id;
+    char name[50];
+    float grade;
+    struct Node * next;
+};
+
+struct Node* add_student(struct Node* current){
+    struct Node* newnode;
+    newnode=(struct Node *)malloc(sizeof(struct Node));
+    printf("Enter student ID\n");
+    scanf("%d",&newnode->id);
+    printf("Enter student name\n");
+    scanf("%s",newnode->name);
+    printf("Enter grade\n");
+    scanf("%f",&newnode->grade);
+    current->next=newnode;
+    current=newnode;
+    current->next=NULL;
+    printf("Student added succesfully\n");
+    return current;
+}
+
+void view_students(struct Node* head){
+    struct Node* temp;
+    temp=head;
+    printf("Student Records\n");
+    while(temp!=NULL){
+        printf("ID:%d, Name:%s, Grade:%f\n",temp->id,temp->name,temp->grade);
+        temp=temp->next;
+    }
+}
+
+void search_student(struct Node* head){
+    printf("Enter the student ID to search\n");
+    int id;
+    scanf("%d",&id);
+    struct Node* temp;
+    temp=head;
+    while(temp!=NULL){
+        if(temp->id==id){
+            printf("Student Found\n");
+            printf("ID:%d, Name:%s, Grade:%f\n",temp->id,temp->name,temp->grade);
+            return;
+        }
+        temp=temp->next;
+    }
+    printf("Student Not found\n");
+}
+
+void threshold(struct Node* head){
+    printf("Enter the threshold\n");
+    float t;
+    scanf("%f",&t);
+    struct Node* temp;
+    temp=head;
+    printf("Students with grade >%f\n",t);
+    while(temp!=NULL){
+        if((temp->grade)>t){
+            printf("ID:%d, Name:%s, Grade:%f\n",temp->id,temp->name,temp->grade);
+           
+        }
+        temp=temp->next;
+    }
+}
+
+int main(){
+    int choice;
+    struct Node *head;
+    struct Node *current;
+    head = (struct Node *)malloc(sizeof(struct Node));
+    head->next=NULL;
+    current=head;
+    printf("1. Add Student\n");
+    printf("2. View All Students \n");
+    printf("3. Add Student\n");
+    printf("4. Display Students Above a grade threshold\n");
+    printf("5. Exit\n");
+    while(choice!=5){
+    printf("Enter your choice\n");
+    scanf("%d",&choice);
+    switch(choice){
+        case 1:
+        current= add_student(current);
+        break;
+
+        case 2:
+        view_students(head);
+        break;
+
+        case 3:
+        search_student(head);
+        break;
+
+        case 4:
+        threshold(head);
+        break;
+    }}
+
+    printf("Program Terminated\n");
+}
