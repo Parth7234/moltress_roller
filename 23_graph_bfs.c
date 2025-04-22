@@ -108,134 +108,109 @@ int main(){
         printf("\n");
     }
 
-    //some code for checking for cycles in a graph using bfs
+    #include <stdio.h>
+#include <stdlib.h>
 
-//     #include <stdio.h>
-// #include <stdlib.h>
+int graph[100][100];
 
-// int graph[100][100];
+struct queue {
+    int size;
+    int f;
+    int r;
+    int* arr;
+};
 
-// struct queue {
-//     int size;
-//     int f;
-//     int r;
-//     int* arr;
-// };
+int isEmpty(struct queue *q) {
+    return q->r == q->f;
+}
 
-// int isEmpty(struct queue *q) {
-//     return q->r == q->f;
-// }
+int isFull(struct queue *q) {
+    return q->r == q->size - 1;
+}
 
-// int isFull(struct queue *q) {
-//     return q->r == q->size - 1;
-// }
+void enqueue(struct queue *q, int val) {
+    if (isFull(q)) {
+        printf("Queue is full\n");
+    } else {
+        q->r++;
+        q->arr[q->r] = val;
+    }
+}
 
-// void enqueue(struct queue *q, int val) {
-//     if (isFull(q)) {
-//         printf("Queue is full\n");
-//     } else {
-//         q->r++;
-//         q->arr[q->r] = val;
-//     }
-// }
+int dequeue(struct queue *q) {
+    int a = -1;
+    if (isEmpty(q)) {
+        printf("Queue is empty\n");
+    } else {
+        q->f++;
+        a = q->arr[q->f];
+    }
+    return a;
+}
 
-// int dequeue(struct queue *q) {
-//     if (isEmpty(q)) {
-//         printf("Queue is empty\n");
-//         return -1;
-//     } else {
-//         q->f++;
-//         return q->arr[q->f];
-//     }
-// }
+int main() {
+    struct queue q;
+    q.size = 100;
+    q.f = q.r = 0;
+    q.arr = (int*) malloc(q.size * sizeof(int));
 
-// int bfsCycleCheck(int start, int n, int* visited, int* parent) {
-//     struct queue q;
-//     q.size = 100;
-//     q.f = q.r = 0;
-//     q.arr = (int*) malloc(q.size * sizeof(int));
+    int n, edge;
+    printf("Enter the number of vertices in the graph: ");
+    scanf("%d", &n);
 
-//     visited[start] = 1;
-//     parent[start] = -1;
-//     enqueue(&q, start);
+    printf("Enter number of edges in the graph: ");
+    scanf("%d", &edge);
 
-//     while (!isEmpty(&q)) {
-//         int node = dequeue(&q);
-//         for (int j = 0; j < n; j++) {
-//             if (graph[node][j] == 1) {
-//                 if (!visited[j]) {
-//                     visited[j] = 1;
-//                     parent[j] = node;
-//                     enqueue(&q, j);
-//                 } else if (parent[node] != j) {
-//                     // Found a back edge (cycle)
-//                     free(q.arr);
-//                     return 1;
-//                 }
-//             }
-//         }
-//     }
+    // Initialize adjacency matrix
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            graph[i][j] = 0;
 
-//     free(q.arr);
-//     return 0;
-// }
+    // Read edges
+    for (int i = 0; i < edge; i++) {
+        int x, y;
+        printf("Enter an edge pair (u v): ");
+        scanf("%d %d", &x, &y);
+        graph[x][y] = 1;
+        graph[y][x] = 1;
+    }
 
-// int main() {
-//     int n, edge;
-//     printf("Enter the number of vertices in the graph\n");
-//     scanf("%d", &n);
-//     printf("Enter number of edges in the graph\n");
-//     scanf("%d", &edge);
+    // Visited array and parent array
+    int* visited = (int*) calloc(n, sizeof(int));
+    int* parent = (int*) malloc(n * sizeof(int));
+    for (int i = 0; i < n; i++) parent[i] = -1;
 
-//     // Initialize adjacency matrix
-//     for (int i = 0; i < n; i++)
-//         for (int j = 0; j < n; j++)
-//             graph[i][j] = 0;
+    int cycleFound = 0;
 
-//     // Build the graph
-//     for (int i = 0; i < edge; i++) {
-//         int x, y;
-//         printf("Enter an edge pair\n");
-//         scanf("%d %d", &x, &y);
-//         graph[x][y] = 1;
-//         graph[y][x] = 1;  // Undirected graph
-//     }
+    for (int start = 0; start < n; start++) {
+        if (!visited[start]) {
+            enqueue(&q, start);
+            visited[start] = 1;
 
-//     // Print adjacency list from matrix
-//     printf("\nAdjacency List:\n");
-//     for (int i = 0; i < n; i++) {
-//         printf("%d :", i);
-//         for (int j = 0; j < n; j++) {
-//             if (graph[i][j] == 1)
-//                 printf("%d ", j);
-//         }
-//         printf("\n");
-//     }
+            while (!isEmpty(&q)) {
+                int node = dequeue(&q);
+                for (int j = 0; j < n; j++) {
+                    if (graph[node][j]) {
+                        if (!visited[j]) {
+                            visited[j] = 1;
+                            parent[j] = node;
+                            enqueue(&q, j);
+                        } else if (parent[node] != j) {
+                            cycleFound = 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-//     // Cycle detection using BFS
-//     int* visited = (int*)calloc(n, sizeof(int));
-//     int* parent = (int*)malloc(n * sizeof(int));
-//     int cycleFound = 0;
+    if (cycleFound)
+        printf("Cycle Detected in the Graph.\n");
+    else
+        printf("No Cycle Detected in the Graph.\n");
 
-//     for (int i = 0; i < n; i++) {
-//         if (!visited[i]) {
-//             if (bfsCycleCheck(i, n, visited, parent)) {
-//                 cycleFound = 1;
-//                 break;
-//             }
-//         }
-//     }
-
-//     if (cycleFound)
-//         printf("\nThe road map contains a cycle (circular route).\n");
-//     else
-//         printf("\nThe road map does NOT contain any cycle (no circular route).\n");
-
-//     printf("\nProgram exited gracefully.\n");
-//     free(visited);
-//     free(parent);
-//     return 0;
-// }
-
-
+    free(q.arr);
+    free(visited);
+    free(parent);
+    return 0;
 }
