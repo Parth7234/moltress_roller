@@ -1,0 +1,459 @@
+// bst_avl_full.cpp
+#include <bits/stdc++.h>
+using namespace std;
+using ll = long long;
+
+// ---------------- BST ----------------
+struct BSTNode {
+    int val;
+    BSTNode *left, *right;
+    BSTNode(int v): val(v), left(nullptr), right(nullptr) {}
+};
+
+BSTNode* insertBST(BSTNode* root, int val) {
+    if (!root) return new BSTNode(val);
+    if (val < root->val) root->left = insertBST(root->left, val);
+    else root->right = insertBST(root->right, val);
+    return root;
+}
+
+BSTNode* searchBST(BSTNode* root, int val) {
+    if (!root || root->val == val) return root;
+    if (val < root->val) return searchBST(root->left, val);
+    return searchBST(root->right, val);
+}
+
+BSTNode* findMinBST(BSTNode* root) {
+    while (root && root->left) root = root->left;
+    return root;
+}
+
+BSTNode* deleteBST(BSTNode* root, int val) {
+    if (!root) return nullptr;
+    if (val < root->val) root->left = deleteBST(root->left, val);
+    else if (val > root->val) root->right = deleteBST(root->right, val);
+    else {
+        if (!root->left) { BSTNode* r = root->right; delete root; return r; }
+        if (!root->right) { BSTNode* l = root->left; delete root; return l; }
+        BSTNode* succ = findMinBST(root->right);
+        root->val = succ->val;
+        root->right = deleteBST(root->right, succ->val);
+    }
+    return root;
+}
+
+void inorderBST(BSTNode* root) {
+    if (!root) return;
+    inorderBST(root->left);
+    cout << root->val << " ";
+    inorderBST(root->right);
+}
+
+void preorderBST(BSTNode* root) {
+    if (!root) return;
+    cout << root->val << " ";
+    preorderBST(root->left);
+    preorderBST(root->right);
+}
+
+void postorderBST(BSTNode* root) {
+    if (!root) return;
+    postorderBST(root->left);
+    postorderBST(root->right);
+    cout << root->val << " ";
+}
+
+void levelOrderBST(BSTNode* root) {
+    if (!root) return;
+    queue<BSTNode*> q; q.push(root);
+    while (!q.empty()) {
+        BSTNode* cur = q.front(); q.pop();
+        cout << cur->val << " ";
+        if (cur->left) q.push(cur->left);
+        if (cur->right) q.push(cur->right);
+    }
+}
+
+// ---------------- AVL ----------------
+struct AVLNode {
+    int val;
+    int height;
+    AVLNode *left, *right;
+    AVLNode(int v): val(v), height(1), left(nullptr), right(nullptr) {}
+};
+
+int heightAVL(AVLNode* n) { return n ? n->height : 0; }
+int getBalance(AVLNode* n) { return n ? heightAVL(n->left) - heightAVL(n->right) : 0; }
+
+AVLNode* rightRotate(AVLNode* y) {
+    AVLNode* x = y->left;
+    AVLNode* T2 = x->right;
+    x->right = y;
+    y->left = T2;
+    y->height = 1 + max(heightAVL(y->left), heightAVL(y->right));
+    x->height = 1 + max(heightAVL(x->left), heightAVL(x->right));
+    return x;
+}
+
+AVLNode* leftRotate(AVLNode* x) {
+    AVLNode* y = x->right;
+    AVLNode* T2 = y->left;
+    y->left = x;
+    x->right = T2;
+    x->height = 1 + max(heightAVL(x->left), heightAVL(x->right));
+    y->height = 1 + max(heightAVL(y->left), heightAVL(y->right));
+    return y;
+}
+
+AVLNode* insertAVL(AVLNode* node, int key) {
+    if (!node) return new AVLNode(key);
+    if (key < node->val) node->left = insertAVL(node->left, key);
+    else if (key > node->val) node->right = insertAVL(node->right, key);
+    else return node; // no duplicates
+
+    node->height = 1 + max(heightAVL(node->left), heightAVL(node->right));
+    int balance = getBalance(node);
+
+    // LL
+    if (balance > 1 && key < node->left->val) return rightRotate(node);
+    // RR
+    if (balance < -1 && key > node->right->val) return leftRotate(node);
+    // LR
+    if (balance > 1 && key > node->left->val) {
+        node->left = leftRotate(node->left);
+        return rightRotate(node);
+    }
+    // RL
+    if (balance < -1 && key < node->right->val) {
+        node->right = rightRotate(node->right);
+        return leftRotate(node);
+    }
+    return node;
+}
+
+AVLNode* minValueNodeAVL(AVLNode* node) {
+    AVLNode* cur = node;
+    while (cur->left) cur = cur->left;
+    return cur;
+}
+
+AVLNode* deleteAVL(AVLNode* root, int key) {
+    if (!root) return nullptr;
+    if (key < root->val) root->left = deleteAVL(root->left, key);
+    else if (key > root->val) root->right = deleteAVL(root->right, key);
+    else {
+        if (!root->left || !root->right) {
+            AVLNode* temp = root->left ? root->left : root->right;
+            if (!temp) { delete root; return nullptr; }
+            else { *root = *temp; delete temp; }
+        } else {
+            AVLNode* temp = minValueNodeAVL(root->right);
+            root->val = temp->val;
+            root->right = deleteAVL(root->right, temp->val);
+        }
+    }
+    root->height = 1 + max(heightAVL(root->left), heightAVL(root->right));
+    int balance = getBalance(root);
+    // balancing
+    if (balance > 1 && getBalance(root->left) >= 0) return rightRotate(root);
+    if (balance > 1 && getBalance(root->left) < 0) {
+        root->left = leftRotate(root->left);
+        return rightRotate(root);
+    }
+    if (balance < -1 && getBalance(root->right) <= 0) return leftRotate(root);
+    if (balance < -1 && getBalance(root->right) > 0) {
+        root->right = rightRotate(root->right);
+        return leftRotate(root);
+    }
+    return root;
+}
+
+// traversals for AVL (same as BST)
+void inorderAVL(AVLNode* root) { if(!root) return; inorderAVL(root->left); cout<<root->val<<" "; inorderAVL(root->right); }
+void preorderAVL(AVLNode* root) { if(!root) return; cout<<root->val<<" "; preorderAVL(root->left); preorderAVL(root->right); }
+void levelOrderAVL(AVLNode* root) {
+    if(!root) return;
+    queue<AVLNode*> q; q.push(root);
+    while(!q.empty()){
+        AVLNode* cur = q.front(); q.pop();
+        cout<<cur->val<<" ";
+        if(cur->left) q.push(cur->left);
+        if(cur->right) q.push(cur->right);
+    }
+}
+
+// ---------------- demo main ----------------
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    // BST demo
+    BSTNode* root = nullptr;
+    root = insertBST(root, 50);
+    insertBST(root, 30); insertBST(root, 70); insertBST(root, 20); insertBST(root, 40);
+    insertBST(root, 60); insertBST(root, 80);
+    cout << "BST inorder: "; inorderBST(root); cout << "\n";
+    cout << "BST level: "; levelOrderBST(root); cout << "\n";
+    root = deleteBST(root, 50);
+    cout << "BST inorder after delete 50: "; inorderBST(root); cout << "\n";
+
+    // AVL demo
+    AVLNode* aroot = nullptr;
+    vector<int> vals = {10,20,30,40,50,25};
+    for (int x : vals) aroot = insertAVL(aroot, x);
+    cout << "AVL inorder: "; inorderAVL(aroot); cout << "\n";
+    cout << "AVL level: "; levelOrderAVL(aroot); cout << "\n";
+    aroot = deleteAVL(aroot, 40);
+    cout << "AVL inorder after deleting 40: "; inorderAVL(aroot); cout << "\n";
+
+    return 0;
+}
+
+
+// algorithms_bfprt.cpp
+#include <bits/stdc++.h>
+using namespace std;
+using ll = long long;
+
+// ---------------- SORTS ----------------
+void insertionSort(vector<int>& arr) {
+    for (int i = 1; i < (int)arr.size(); ++i) {
+        int key = arr[i], j = i - 1;
+        while (j >= 0 && arr[j] > key) { arr[j + 1] = arr[j]; --j; }
+        arr[j + 1] = key;
+    }
+}
+
+void mergeVec(vector<int>& arr, int l, int m, int r) {
+    vector<int> L(arr.begin()+l, arr.begin()+m+1);
+    vector<int> R(arr.begin()+m+1, arr.begin()+r+1);
+    int i=0,j=0,k=l;
+    while (i < (int)L.size() && j < (int)R.size())
+        arr[k++] = (L[i] <= R[j]) ? L[i++] : R[j++];
+    while (i < (int)L.size()) arr[k++] = L[i++];
+    while (j < (int)R.size()) arr[k++] = R[j++];
+}
+
+void mergeSort(vector<int>& arr, int l, int r) {
+    if (l >= r) return;
+    int m = (l + r) / 2;
+    mergeSort(arr, l, m);
+    mergeSort(arr, m+1, r);
+    mergeVec(arr, l, m, r);
+}
+
+int partitionQS(vector<int>& arr, int l, int r) {
+    int pivot = arr[r];
+    int i = l - 1;
+    for (int j = l; j < r; ++j) {
+        if (arr[j] <= pivot) swap(arr[++i], arr[j]);
+    }
+    swap(arr[i+1], arr[r]);
+    return i+1;
+}
+
+void quickSort(vector<int>& arr, int l, int r) {
+    if (l < r) {
+        int pi = partitionQS(arr, l, r);
+        quickSort(arr, l, pi - 1);
+        quickSort(arr, pi + 1, r);
+    }
+}
+
+// ---------------- BINARY SEARCH ----------------
+int binarySearch(const vector<int>& arr, int key) {
+    int l = 0, r = (int)arr.size() - 1;
+    while (l <= r) {
+        int m = l + (r - l) / 2;
+        if (arr[m] == key) return m;
+        else if (arr[m] < key) l = m + 1;
+        else r = m - 1;
+    }
+    return -1;
+}
+
+// ---------------- MAX SUBARRAY ----------------
+int kadane(const vector<int>& arr) {
+    int cur = arr[0], best = arr[0];
+    for (int i = 1; i < (int)arr.size(); ++i) {
+        cur = max(arr[i], cur + arr[i]);
+        best = max(best, cur);
+    }
+    return best;
+}
+
+int maxCrossSum(const vector<int>& arr, int l, int m, int r) {
+    long long sum = 0, left_sum = LLONG_MIN;
+    for (int i = m; i >= l; --i) { sum += arr[i]; left_sum = max(left_sum, sum); }
+    sum = 0; long long right_sum = LLONG_MIN;
+    for (int i = m+1; i <= r; ++i) { sum += arr[i]; right_sum = max(right_sum, sum); }
+    return (int)(left_sum + right_sum);
+}
+
+int maxSubarrayDC(const vector<int>& arr, int l, int r) {
+    if (l == r) return arr[l];
+    int m = (l + r) / 2;
+    return max({ maxSubarrayDC(arr, l, m),
+                 maxSubarrayDC(arr, m+1, r),
+                 maxCrossSum(arr, l, m, r) });
+}
+
+// ---------------- CLOSEST PAIR ----------------
+struct Point { int x, y; };
+
+long long dist2(const Point& a, const Point& b) {
+    long long dx = (long long)a.x - b.x;
+    long long dy = (long long)a.y - b.y;
+    return dx*dx + dy*dy;
+}
+
+long long bruteForce(vector<Point>& pts, int l, int r) {
+    long long mn = LLONG_MAX;
+    for (int i = l; i <= r; ++i)
+        for (int j = i+1; j <= r; ++j)
+            mn = min(mn, dist2(pts[i], pts[j]));
+    return mn;
+}
+
+long long stripClosest(vector<Point>& strip, long long d) {
+    sort(strip.begin(), strip.end(), [](const Point& a, const Point& b){ return a.y < b.y; });
+    long long mn = d;
+    for (int i = 0; i < (int)strip.size(); ++i) {
+        for (int j = i+1; j < (int)strip.size() && (long long)(strip[j].y - strip[i].y)*(strip[j].y - strip[i].y) < mn; ++j) {
+            mn = min(mn, dist2(strip[i], strip[j]));
+        }
+    }
+    return mn;
+}
+
+long long closestPairRec(vector<Point>& pts, int l, int r) {
+    if (r - l + 1 <= 3) return bruteForce(pts, l, r);
+    int m = (l + r) / 2;
+    long long dl = closestPairRec(pts, l, m);
+    long long dr = closestPairRec(pts, m+1, r);
+    long long d = min(dl, dr);
+    int midX = pts[m].x;
+    vector<Point> strip;
+    for (int i = l; i <= r; ++i) {
+        long long dx = (long long)(pts[i].x - midX);
+        if (dx*dx < d) strip.push_back(pts[i]);
+    }
+    long long ds = stripClosest(strip, d);
+    return min(d, ds);
+}
+
+long long closestPair(vector<Point>& pts) {
+    sort(pts.begin(), pts.end(), [](const Point& a, const Point& b){ return a.x < b.x; });
+    return closestPairRec(pts, 0, (int)pts.size() - 1);
+}
+
+// ---------------- STRASSEN ----------------
+using mat = vector<vector<int>>;
+
+mat addM(const mat &A, const mat &B) {
+    int n = A.size();
+    mat C(n, vector<int>(n));
+    for (int i=0;i<n;++i) for (int j=0;j<n;++j) C[i][j] = A[i][j] + B[i][j];
+    return C;
+}
+
+mat subM(const mat &A, const mat &B) {
+    int n = A.size();
+    mat C(n, vector<int>(n));
+    for (int i=0;i<n;++i) for (int j=0;j<n;++j) C[i][j] = A[i][j] - B[i][j];
+    return C;
+}
+
+mat strassen(const mat &A, const mat &B) {
+    int n = A.size();
+    mat C(n, vector<int>(n,0));
+    if (n == 1) { C[0][0] = A[0][0] * B[0][0]; return C; }
+    int k = n/2;
+    mat A11(k, vector<int>(k)), A12(k, vector<int>(k)), A21(k, vector<int>(k)), A22(k, vector<int>(k));
+    mat B11(k, vector<int>(k)), B12(k, vector<int>(k)), B21(k, vector<int>(k)), B22(k, vector<int>(k));
+    for (int i=0;i<k;++i) for (int j=0;j<k;++j) {
+        A11[i][j] = A[i][j]; A12[i][j] = A[i][j+k];
+        A21[i][j] = A[i+k][j]; A22[i][j] = A[i+k][j+k];
+        B11[i][j] = B[i][j]; B12[i][j] = B[i][j+k];
+        B21[i][j] = B[i+k][j]; B22[i][j] = B[i+k][j+k];
+    }
+    mat M1 = strassen(addM(A11,A22), addM(B11,B22));
+    mat M2 = strassen(addM(A21,A22), B11);
+    mat M3 = strassen(A11, subM(B12,B22));
+    mat M4 = strassen(A22, subM(B21,B11));
+    mat M5 = strassen(addM(A11,A12), B22);
+    mat M6 = strassen(subM(A21,A11), addM(B11,B12));
+    mat M7 = strassen(subM(A12,A22), addM(B21,B22));
+    for (int i=0;i<k;++i) for (int j=0;j<k;++j) {
+        C[i][j] = M1[i][j] + M4[i][j] - M5[i][j] + M7[i][j];
+        C[i][j+k] = M3[i][j] + M5[i][j];
+        C[i+k][j] = M2[i][j] + M4[i][j];
+        C[i+k][j+k] = M1[i][j] - M2[i][j] + M3[i][j] + M6[i][j];
+    }
+    return C;
+}
+
+// ---------------- BFPRT (median of medians) ----------------
+int partitionBF(vector<int>& arr, int l, int r, int pivotValue) {
+    int pivotIndex = -1;
+    for (int i = l; i <= r; ++i) if (arr[i] == pivotValue) { pivotIndex = i; break; }
+    if (pivotIndex == -1) pivotIndex = r;
+    swap(arr[pivotIndex], arr[r]);
+    int store = l - 1;
+    for (int i = l; i < r; ++i) {
+        if (arr[i] <= arr[r]) swap(arr[++store], arr[i]);
+    }
+    swap(arr[++store], arr[r]);
+    return store;
+}
+
+int selectMedian(vector<int>& arr, int l, int r) {
+    int n = r - l + 1;
+    if (n <= 5) {
+        sort(arr.begin()+l, arr.begin()+r+1);
+        return arr[l + n/2];
+    }
+    int write = l;
+    for (int i = l; i <= r; i += 5) {
+        int subR = min(i+4, r);
+        sort(arr.begin()+i, arr.begin()+subR+1);
+        int median = arr[i + (subR - i)/2];
+        swap(arr[write++], arr[i + (subR - i)/2]);
+    }
+    return selectMedian(arr, l, write-1);
+}
+
+int BFPRT(vector<int> arr, int l, int r, int k) {
+    // arr passed by value intentionally to avoid damaging caller; BFPRT needs array mutated for pivots
+    if (l == r) return arr[l];
+    int pivot = selectMedian(arr, l, r);
+    int pi = partitionBF(arr, l, r, pivot);
+    int rank = pi - l + 1;
+    if (k == rank) return arr[pi];
+    if (k < rank) return BFPRT(arr, l, pi-1, k);
+    else return BFPRT(arr, pi+1, r, k-rank);
+}
+
+// ---------------- demo main ----------------
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    vector<int> v = {7,2,5,3,9};
+    cout << "insertionSort: ";
+    insertionSort(v);
+    for (int x : v) cout << x << " ";
+    cout << "\n";
+
+    vector<int> v2 = {7,2,5,3,9};
+    cout << "kth (BFPRT) k=3 (1-based): " << BFPRT(v2, 0, (int)v2.size()-1, 3) << "\n";
+
+    vector<int> arr = {-2,1,-3,4,-1,2,1,-5,4};
+    cout << "Kadane: " << kadane(arr) << "\n";
+    cout << "Max subarray DC: " << maxSubarrayDC(arr, 0, (int)arr.size()-1) << "\n";
+
+    vector<Point> pts = {{0,0},{3,4},{1,1},{6,0}};
+    cout << "closest pair squared dist: " << closestPair(pts) << "\n";
+
+    return 0;
+}
