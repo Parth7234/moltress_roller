@@ -1,0 +1,41 @@
+unix
+date
+tput clear
+banner Good Morning India
+clear
+cal 
+cal 2025
+cal 2 2025 
+who
+whoami
+mkdir
+cd
+ls
+man ls
+ls -l chap*
+cat README  // read the contents of a file
+wc list
+ls | wc
+x=5
+echo $x
+exit
+type ls
+echo $PATH
+type echo
+ls -z
+ls -a
+sudo apt-get update
+sudo apt-get upgrade
+sudo apt-get install
+pwd
+man wc
+man command
+command --help
+df -Hd
+du -hs folder
+wc note ; ls -l note
+(wc note ; ls -l note) > newlist
+man -e grep
+man -k inode
+find --help
+sudo poweroff
