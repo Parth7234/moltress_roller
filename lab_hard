@@ -1,0 +1,1078 @@
+/* ============================================================
+ * SMASH HIT – Brick Breaker for DE-1 SoC (ARMv7)
+ * ============================================================
+ * Controls:
+ * KEY0 – Move paddle RIGHT    KEY1 – Move paddle LEFT
+ * KEY2 – Launch ball          KEY3 – Restart game
+ *
+ * Display:
+ * VGA 320×240 (16-bit RGB565), HEX: score/level, LEDR: lives
+ *
+ * Features:
+ * • 5×8 brick grid with gradient shading and power-ups
+ * • Double-buffered VSync rendering (no flicker)
+ * • Difficulty selection (Easy / Medium / Hard)
+ * • Power-ups: W = Wide paddle, M = Multi-ball
+ * • Top-3 leaderboard
+ * ============================================================ */
+
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* ───────── Colours (RGB565) ───────── */
+#define BLACK 0x0000
+#define WHITE 0xFFFF
+#define RED 0xF800
+#define GREEN 0x07E0
+#define CYAN 0x07FF
+#define YELLOW 0xFFE0
+#define ORANGE 0xFD20
+#define GOLD 0xFEA0
+#define DGRAY 0x7BEF
+#define LGRAY 0xC618
+#define DARKBG 0x2104
+
+/* ───────── Layout constants ───────── */
+#define SCREEN_W 320
+#define SCREEN_H 240
+#define BRICK_ROWS 5
+#define BRICK_COLS 8
+#define BRICK_W 36
+#define BRICK_H 12
+#define BRICK_GAP 2
+#define BRICK_OFFSET_X 6
+#define BRICK_OFFSET_Y 26
+#define PADDLE_Y 224
+#define PADDLE_H 6
+#define PADDLE_W_DEFAULT 40
+#define PADDLE_W_WIDE 60
+#define BALL_R_DEFAULT 3
+#define MAX_BALLS 3
+#define POWERUP_W 10
+#define POWERUP_H 8
+#define POWERUP_SPEED 2
+#define MAX_POWERUPS 4
+#define HAS_POWERUP 0x80
+#define LEADERBOARD_SIZE 3
+#define HEADER_BG 0x18E3
+
+/* ───────── HEX segment encoding ───────── */
+static const char seg7[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D,
+                            0x7D, 0x07, 0x7F, 0x67, 0x77, 0x7C,
+                            0x39, 0x5E, 0x79, 0x71, 0x40};
+
+/* ───────── Memory-mapped I/O ───────── */
+volatile int *LEDR_ptr = (int *)0xFF200000;
+volatile int *KEY_ptr = (int *)0xFF200050;
+volatile int *HEX3_0_ptr = (int *)0xFF200020;
+volatile int *HEX5_4_ptr = (int *)0xFF200030;
+volatile int pixel_buffer_start;
+
+/* ───────── Brick row colours ───────── */
+static const short brick_colors_top[BRICK_ROWS] = {0x549F, 0xCA49, 0x8C60,
+                                                   0x2C69, 0xA817};
+static const short brick_colors_bot[BRICK_ROWS] = {0x325C, 0x9A06, 0x6BE0,
+                                                   0x1C25, 0x780F};
+
+/* ───────── Types ───────── */
+typedef enum { PU_NONE = 0, PU_WIDE, PU_MULTI } PowerUpType;
+
+typedef struct {
+  int x, y, dx, dy, radius;
+  bool active, launched;
+} Ball;
+
+typedef struct {
+  int x, y;
+  PowerUpType type;
+  bool active;
+} PowerUp;
+
+typedef struct {
+  int x, width;
+} Paddle;
+typedef struct {
+  int score;
+} LeaderEntry;
+
+/* ───────── State ───────── */
+static int difficulty, speed_mul_num;
+static int bricks[BRICK_ROWS][BRICK_COLS];
+static Ball balls[MAX_BALLS], old_balls[MAX_BALLS];
+static PowerUp powerups[MAX_POWERUPS], old_powerups[MAX_POWERUPS];
+static Paddle paddle, old_paddle;
+static int score, lives, level;
+static bool game_running, ball_on_paddle;
+static int wide_timer, frame_count;
+static LeaderEntry leaderboard[LEADERBOARD_SIZE];
+static unsigned int rand_state = 12345;
+
+/* ───────── Forward declarations ───────── */
+void plot_pixel(int x, int y, short int color);
+void draw_box(int x, int y, int w, int h, short int color);
+void draw_line(int x0, int y0, int x1, int y1, short int color);
+void draw_circle(int cx, int cy, int r, short int color);
+void clear_screen(short int color);
+void swap_int(int *a, int *b);
+void wait_for_vsync(void);
+
+void init_game(void);
+void init_bricks(void);
+void init_ball(Ball *b, bool on_paddle);
+void reset_balls(void);
+void draw_background(void);
+void draw_bricks(void);
+void draw_paddle_obj(void);
+void draw_ball(Ball *b, short int color);
+void draw_all_balls(void);
+void erase_old_balls(void);
+void draw_score_bar(void);
+void draw_digit_at(int x, int y, int digit, short int color);
+void draw_char_at(int x, int y, char c, short int color);
+void draw_string_at(int x, int y, const char *s, short int color);
+void draw_score_5digits(int x, int y, int val, short int color);
+
+void update_balls(void);
+void handle_brick_collision(Ball *b);
+void handle_wall_collision(Ball *b);
+void handle_paddle_collision(Ball *b);
+void spawn_powerup(int bx, int by, PowerUpType type);
+void update_powerups(void);
+void draw_powerups(void);
+void erase_old_powerups(void);
+void apply_powerup(PowerUpType type);
+
+void read_keys(void);
+void update_hex_display(void);
+void show_game_over(void);
+void show_leaderboard_screen(void);
+void update_leaderboard(int new_score);
+bool all_bricks_destroyed(void);
+void next_level(void);
+void save_old_state(void);
+void show_start_screen(void);
+int get_ball_speed(void);
+void draw_full_scene(void);
+unsigned int pseudo_rand(void);
+
+/* ═══════════════════════════════════════════════════════════════
+ * UTILITIES
+ * ═══════════════════════════════════════════════════════════════ */
+void wait_for_vsync(void) {
+  volatile int *ctrl = (int *)0xFF203020;
+  *ctrl = 1;
+  while ((*(ctrl + 3)) & 0x01)
+    ;
+}
+
+unsigned int pseudo_rand(void) {
+  rand_state = rand_state * 1103515245 + 12345;
+  return (rand_state >> 16) & 0x7FFF;
+}
+
+int get_ball_speed(void) {
+  int base = 320 + level * 40;
+  int speed = (base * speed_mul_num) / 2;
+  int cap = (640 * speed_mul_num) / 2;
+  return (speed > cap) ? cap : speed;
+}
+
+void save_old_state(void) {
+  int i;
+  for (i = 0; i < MAX_BALLS; i++)
+    old_balls[i] = balls[i];
+  for (i = 0; i < MAX_POWERUPS; i++)
+    old_powerups[i] = powerups[i];
+  old_paddle = paddle;
+}
+
+/* Draw the full game scene (used to populate both buffers) */
+void draw_full_scene(void) {
+  clear_screen(DARKBG);
+  draw_background();
+  draw_bricks();
+  draw_paddle_obj();
+  draw_all_balls();
+  draw_score_bar();
+  update_hex_display();
+}
+
+/* Draw content on both buffers via vsync swap */
+void draw_on_both_buffers(void (*draw_fn)(void)) {
+  volatile int *pixel_ctrl = (int *)0xFF203020;
+  draw_fn();
+  wait_for_vsync();
+  pixel_buffer_start = *(pixel_ctrl + 1);
+  draw_fn();
+  wait_for_vsync();
+  pixel_buffer_start = *(pixel_ctrl + 1);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * START SCREEN
+ * ═══════════════════════════════════════════════════════════════ */
+static void draw_start_contents(void) {
+  int i, y;
+  short int clr;
+
+  clear_screen(DARKBG);
+  draw_string_at(100, 30, "SMASH HIT", GOLD);
+  draw_line(95, 40, 210, 40, DGRAY);
+  draw_string_at(75, 52, "SELECT DIFFICULTY", WHITE);
+  draw_string_at(85, 72, "KEY0  EASY", GREEN);
+  draw_string_at(85, 88, "KEY1  MEDIUM", YELLOW);
+  draw_string_at(85, 104, "KEY2  HARD", RED);
+
+  /* Leaderboard */
+  draw_line(70, 125, 250, 125, DGRAY);
+  draw_string_at(90, 132, "TOP SCORES", GOLD);
+  for (i = 0; i < LEADERBOARD_SIZE; i++) {
+    y = 148 + i * 14;
+    clr = (i == 0) ? GOLD : WHITE;
+    draw_char_at(100, y, '#', LGRAY);
+    draw_digit_at(107, y, i + 1, LGRAY);
+    draw_char_at(116, y, ':', LGRAY);
+    draw_score_5digits(126, y, leaderboard[i].score, clr);
+  }
+  draw_string_at(55, 210, "PRESS A KEY TO BEGIN", LGRAY);
+}
+
+void show_start_screen(void) {
+  int kv;
+  draw_on_both_buffers(draw_start_contents);
+
+  /* Wait for KEY0, KEY1, or KEY2 */
+  while (1) {
+    kv = *KEY_ptr;
+    if (kv & 0x1) {
+      difficulty = 0;
+      speed_mul_num = 2;
+      while (*KEY_ptr & 0x1)
+        ;
+      break;
+    }
+    if (kv & 0x2) {
+      difficulty = 1;
+      speed_mul_num = 3;
+      while (*KEY_ptr & 0x2)
+        ;
+      break;
+    }
+    if (kv & 0x4) {
+      difficulty = 2;
+      speed_mul_num = 4;
+      while (*KEY_ptr & 0x4)
+        ;
+      break;
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * MAIN
+ * ═══════════════════════════════════════════════════════════════ */
+int main(void) {
+  volatile int *pixel_ctrl = (int *)0xFF203020;
+  int i;
+  bool any_active;
+
+  for (i = 0; i < LEADERBOARD_SIZE; i++)
+    leaderboard[i].score = 0;
+
+  /* Set up double buffering */
+  *(pixel_ctrl + 1) = 0xC0000000;
+  wait_for_vsync();
+  pixel_buffer_start = *pixel_ctrl;
+  clear_screen(DARKBG);
+  *(pixel_ctrl + 1) = 0xC8000000;
+  pixel_buffer_start = *(pixel_ctrl + 1);
+  clear_screen(DARKBG);
+
+  show_start_screen();
+  init_game();
+
+  while (1) {
+    read_keys();
+
+    if (!game_running)
+      continue;
+
+    frame_count++;
+
+    /* Step 1: Erase old dynamic objects from back buffer */
+    erase_old_balls();
+    erase_old_powerups();
+
+    /* Step 2: Save state, then update logic */
+    save_old_state();
+    update_balls();
+    update_powerups();
+
+    /* Power-up timer */
+    if (wide_timer > 0 && --wide_timer == 0)
+      paddle.width = PADDLE_W_DEFAULT;
+
+    /* Next level? */
+    if (all_bricks_destroyed())
+      next_level();
+
+    /* All balls lost? */
+    {
+      any_active = false;
+      for (i = 0; i < MAX_BALLS; i++)
+        if (balls[i].active)
+          any_active = true;
+
+      if (!any_active) {
+        lives--;
+        if (lives <= 0) {
+          update_leaderboard(score);
+          show_game_over();
+          show_leaderboard_screen();
+          while (1) {
+            if (*KEY_ptr & 0x8) {
+              while (*KEY_ptr & 0x8)
+                ;
+              break;
+            }
+          }
+          show_start_screen();
+          init_game();
+          continue;
+        }
+        ball_on_paddle = true;
+        init_ball(&balls[0], true);
+      }
+    }
+
+    /* Step 3: Draw new state */
+    draw_bricks();
+    draw_paddle_obj();
+    draw_all_balls();
+    draw_powerups();
+    draw_score_bar();
+    update_hex_display();
+    *LEDR_ptr = (1 << lives) - 1;
+
+    /* Step 4: VSync swap */
+    wait_for_vsync();
+    pixel_buffer_start = *(pixel_ctrl + 1);
+  }
+
+  return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * INIT / RESET
+ * ═══════════════════════════════════════════════════════════════ */
+void init_game(void) {
+  volatile int *pixel_ctrl = (int *)0xFF203020;
+  int i;
+
+  score = 0;
+  lives = 3;
+  level = 1;
+  game_running = true;
+  ball_on_paddle = true;
+  wide_timer = 0;
+  frame_count = 0;
+
+  paddle.width = PADDLE_W_DEFAULT;
+  paddle.x = SCREEN_W / 2 - paddle.width / 2;
+
+  for (i = 0; i < MAX_POWERUPS; i++)
+    powerups[i].active = false;
+
+  init_bricks();
+  reset_balls();
+
+  /* Draw on both buffers */
+  draw_full_scene();
+  wait_for_vsync();
+  pixel_buffer_start = *(pixel_ctrl + 1);
+  draw_full_scene();
+
+  save_old_state();
+}
+
+void init_bricks(void) {
+  int r, c, hp;
+  for (r = 0; r < BRICK_ROWS; r++)
+    for (c = 0; c < BRICK_COLS; c++) {
+      hp = (level > 1 && pseudo_rand() % 5 == 0) ? 2 : 1;
+      if (pseudo_rand() % 7 == 0)
+        hp |= HAS_POWERUP;
+      bricks[r][c] = hp;
+    }
+}
+
+void init_ball(Ball *b, bool on_paddle_flag) {
+  int speed;
+  b->radius = BALL_R_DEFAULT;
+  b->active = true;
+  if (on_paddle_flag) {
+    b->launched = false;
+    b->x = (paddle.x + paddle.width / 2) << 8;
+    b->y = (PADDLE_Y - b->radius - 1) << 8;
+    b->dx = 0;
+    b->dy = 0;
+  } else {
+    b->launched = true;
+    speed = get_ball_speed();
+    b->dx = (pseudo_rand() % 2 == 0) ? speed : -speed;
+    b->dy = -speed;
+  }
+}
+
+void reset_balls(void) {
+  int i;
+  for (i = 0; i < MAX_BALLS; i++) {
+    balls[i].active = false;
+    balls[i].launched = false;
+  }
+  init_ball(&balls[0], true);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * DRAWING PRIMITIVES
+ * ═══════════════════════════════════════════════════════════════ */
+void plot_pixel(int x, int y, short int color) {
+  if (x < 0 || x >= SCREEN_W || y < 0 || y >= SCREEN_H)
+    return;
+  *(short int *)(pixel_buffer_start + (y << 10) + (x << 1)) = color;
+}
+
+void draw_box(int x, int y, int w, int h, short int color) {
+  int dx, dy;
+  for (dy = 0; dy < h; dy++)
+    for (dx = 0; dx < w; dx++)
+      plot_pixel(x + dx, y + dy, color);
+}
+
+void clear_screen(short int color) {
+  int x, y;
+  for (y = 0; y < SCREEN_H; y++)
+    for (x = 0; x < SCREEN_W; x++)
+      plot_pixel(x, y, color);
+}
+
+void swap_int(int *a, int *b) {
+  int t = *a;
+  *a = *b;
+  *b = t;
+}
+
+void draw_line(int x0, int y0, int x1, int y1, short int color) {
+  bool steep = abs(y1 - y0) > abs(x1 - x0);
+  int deltax, deltay, error, ys, cy, cx;
+
+  if (steep) {
+    swap_int(&x0, &y0);
+    swap_int(&x1, &y1);
+  }
+  if (x0 > x1) {
+    swap_int(&x0, &x1);
+    swap_int(&y0, &y1);
+  }
+
+  deltax = x1 - x0;
+  deltay = abs(y1 - y0);
+  error = -(deltax / 2);
+  ys = (y0 < y1) ? 1 : -1;
+  cy = y0;
+
+  for (cx = x0; cx <= x1; cx++) {
+    if (steep)
+      plot_pixel(cy, cx, color);
+    else
+      plot_pixel(cx, cy, color);
+    error += deltay;
+    if (error >= 0) {
+      cy += ys;
+      error -= deltax;
+    }
+  }
+}
+
+void draw_circle(int cx, int cy, int r, short int color) {
+  int dx, dy;
+  for (dy = -r; dy <= r; dy++)
+    for (dx = -r; dx <= r; dx++)
+      if (dx * dx + dy * dy <= r * r)
+        plot_pixel(cx + dx, cy + dy, color);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * TEXT RENDERING (5×7 bitmap font)
+ * ═══════════════════════════════════════════════════════════════ */
+static const unsigned char font5x7_digits[10][7] = {
+    {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E},
+    {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
+    {0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F},
+    {0x0E, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0E},
+    {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02},
+    {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
+    {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E},
+    {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
+    {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},
+    {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}};
+
+static const unsigned char font5x7_letters[26][7] = {
+    {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, /* A */
+    {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}, /* B */
+    {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}, /* C */
+    {0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E}, /* D */
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}, /* E */
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}, /* F */
+    {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F}, /* G */
+    {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, /* H */
+    {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E}, /* I */
+    {0x01, 0x01, 0x01, 0x01, 0x01, 0x11, 0x0E}, /* J */
+    {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}, /* K */
+    {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}, /* L */
+    {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11}, /* M */
+    {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11}, /* N */
+    {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}, /* O */
+    {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}, /* P */
+    {0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D}, /* Q */
+    {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}, /* R */
+    {0x0E, 0x11, 0x10, 0x0E, 0x01, 0x11, 0x0E}, /* S */
+    {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}, /* T */
+    {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}, /* U */
+    {0x11, 0x11, 0x11, 0x11, 0x0A, 0x0A, 0x04}, /* V */
+    {0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11}, /* W */
+    {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11}, /* X */
+    {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04}, /* Y */
+    {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F}  /* Z */
+};
+
+void draw_digit_at(int x, int y, int digit, short int color) {
+  int row, col;
+  if (digit < 0 || digit > 9)
+    return;
+  for (row = 0; row < 7; row++)
+    for (col = 0; col < 5; col++)
+      if (font5x7_digits[digit][row] & (0x10 >> col))
+        plot_pixel(x + col, y + row, color);
+}
+
+void draw_char_at(int x, int y, char c, short int color) {
+  int idx = -1;
+  int row, col;
+
+  if (c >= '0' && c <= '9') {
+    draw_digit_at(x, y, c - '0', color);
+    return;
+  }
+  if (c == ' ')
+    return;
+  if (c == ':') {
+    plot_pixel(x + 2, y + 2, color);
+    plot_pixel(x + 2, y + 5, color);
+    return;
+  }
+  if (c == '-') {
+    draw_line(x + 1, y + 3, x + 3, y + 3, color);
+    return;
+  }
+  if (c == '#') {
+    draw_line(x + 1, y + 1, x + 1, y + 5, color);
+    draw_line(x + 3, y + 1, x + 3, y + 5, color);
+    draw_line(x, y + 2, x + 4, y + 2, color);
+    draw_line(x, y + 4, x + 4, y + 4, color);
+    return;
+  }
+  
+  if (c >= 'A' && c <= 'Z')
+    idx = c - 'A';
+  else if (c >= 'a' && c <= 'z')
+    idx = c - 'a';
+  if (idx < 0 || idx > 25)
+    return;
+
+  for (row = 0; row < 7; row++)
+    for (col = 0; col < 5; col++)
+      if (font5x7_letters[idx][row] & (0x10 >> col))
+        plot_pixel(x + col, y + row, color);
+}
+
+void draw_string_at(int x, int y, const char *s, short int color) {
+  while (*s) {
+    draw_char_at(x, y, *s, color);
+    x += 6;
+    s++;
+  }
+}
+
+/* Draw a 5-digit score at (x,y) */
+void draw_score_5digits(int x, int y, int val, short int color) {
+  int div;
+  for (div = 10000; div >= 1; div /= 10) {
+    draw_digit_at(x, y, (val / div) % 10, color);
+    x += 7;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * SCENE DRAWING
+ * ═══════════════════════════════════════════════════════════════ */
+void draw_background(void) {
+  draw_box(0, 0, SCREEN_W, 20, HEADER_BG);
+  draw_line(0, 20, 0, SCREEN_H - 1, DGRAY);
+  draw_line(SCREEN_W - 1, 20, SCREEN_W - 1, SCREEN_H - 1, DGRAY);
+  draw_line(0, 20, SCREEN_W - 1, 20, DGRAY);
+  draw_string_at(4, 3, "SMASH HIT", GOLD);
+  plot_pixel(2, 22, DGRAY);
+  plot_pixel(317, 22, DGRAY);
+}
+
+void draw_score_bar(void) {
+  int i;
+  draw_box(120, 2, 80, 9, HEADER_BG);
+  draw_score_5digits(135, 4, score, WHITE);
+
+  draw_box(260, 2, 55, 9, HEADER_BG);
+  draw_string_at(262, 4, "LV", LGRAY);
+  draw_digit_at(276, 4, level % 10, LGRAY);
+
+  draw_box(80, 2, 35, 9, HEADER_BG);
+  for (i = 0; i < lives && i < 5; i++)
+    draw_circle(88 + i * 8, 7, 2, RED);
+}
+
+void draw_bricks(void) {
+  int r, c, bx, by, hp, mx, my;
+  short c_top, c_bot;
+
+  for (r = 0; r < BRICK_ROWS; r++) {
+    for (c = 0; c < BRICK_COLS; c++) {
+      bx = BRICK_OFFSET_X + c * (BRICK_W + BRICK_GAP);
+      by = BRICK_OFFSET_Y + r * (BRICK_H + BRICK_GAP);
+      hp = bricks[r][c] & 0x7F;
+
+      if (hp <= 0) {
+        draw_box(bx, by, BRICK_W, BRICK_H, DARKBG);
+        continue;
+      }
+
+      c_top = brick_colors_top[r];
+      c_bot = brick_colors_bot[r];
+      if (hp == 2) {
+        c_top |= 0x2104;
+        c_bot |= 0x1082;
+      }
+
+      draw_box(bx + 1, by + 1, BRICK_W - 2, BRICK_H / 2 - 1, c_top);
+      draw_box(bx + 1, by + BRICK_H / 2, BRICK_W - 2, BRICK_H / 2 - 1, c_bot);
+
+      /* Outline */
+      draw_line(bx, by, bx + BRICK_W - 1, by, DARKBG);
+      draw_line(bx, by + BRICK_H - 1, bx + BRICK_W - 1, by + BRICK_H - 1,
+                DARKBG);
+      draw_line(bx, by, bx, by + BRICK_H - 1, DARKBG);
+      draw_line(bx + BRICK_W - 1, by, bx + BRICK_W - 1, by + BRICK_H - 1,
+                DARKBG);
+
+      /* Top highlight */
+      draw_line(bx + 1, by + 1, bx + BRICK_W - 2, by + 1, c_top | 0x4208);
+
+      /* Power-up indicator */
+      if (bricks[r][c] & HAS_POWERUP) {
+        mx = bx + BRICK_W / 2;
+        my = by + BRICK_H / 2;
+        draw_line(mx - 2, my, mx + 2, my, WHITE);
+        draw_line(mx, my - 2, mx, my + 2, WHITE);
+      }
+    }
+  }
+}
+
+void draw_paddle_obj(void) {
+  int px = paddle.x, pw = paddle.width;
+  draw_box(1, PADDLE_Y - 1, SCREEN_W - 2, PADDLE_H + 2, DARKBG);
+  draw_box(px + 2, PADDLE_Y, pw - 4, PADDLE_H, WHITE);
+  draw_box(px, PADDLE_Y + 1, 2, PADDLE_H - 2, LGRAY);
+  draw_box(px + pw - 2, PADDLE_Y + 1, 2, PADDLE_H - 2, LGRAY);
+  draw_line(px + 2, PADDLE_Y, px + pw - 3, PADDLE_Y, 0xFFFF);
+  draw_line(px + 2, PADDLE_Y + PADDLE_H - 1, px + pw - 3,
+            PADDLE_Y + PADDLE_H - 1, LGRAY);
+  draw_line(px + pw / 2 - 3, PADDLE_Y + PADDLE_H / 2, px + pw / 2 + 3,
+            PADDLE_Y + PADDLE_H / 2, DGRAY);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * BALL DRAWING / ERASING
+ * ═══════════════════════════════════════════════════════════════ */
+void draw_ball(Ball *b, short int color) {
+  int bx, by;
+  if (!b->active)
+    return;
+  bx = b->x >> 8;
+  by = b->y >> 8;
+  draw_circle(bx, by, b->radius, color);
+  if (color != DARKBG)
+    plot_pixel(bx - 1, by - 1, 0xFFFF);
+}
+
+void draw_all_balls(void) {
+  int i;
+  for (i = 0; i < MAX_BALLS; i++)
+    if (balls[i].active)
+      draw_ball(&balls[i], WHITE);
+}
+
+void erase_old_balls(void) {
+  int i;
+  for (i = 0; i < MAX_BALLS; i++)
+    if (old_balls[i].active)
+      draw_ball(&old_balls[i], DARKBG);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * BALL PHYSICS
+ * ═══════════════════════════════════════════════════════════════ */
+void update_balls(void) {
+  int i;
+  Ball *b;
+
+  for (i = 0; i < MAX_BALLS; i++) {
+    b = &balls[i];
+    if (!b->active)
+      continue;
+
+    if (!b->launched) {
+      b->x = (paddle.x + paddle.width / 2) << 8;
+      b->y = (PADDLE_Y - b->radius - 1) << 8;
+      continue;
+    }
+
+    b->x += b->dx;
+    b->y += b->dy;
+    handle_wall_collision(b);
+    handle_paddle_collision(b);
+    handle_brick_collision(b);
+
+    if ((b->y >> 8) > SCREEN_H + 10)
+      b->active = false;
+  }
+}
+
+void handle_wall_collision(Ball *b) {
+  int bx = b->x >> 8, by = b->y >> 8, r = b->radius;
+  if (bx - r <= 1) {
+    b->x = (1 + r) << 8;
+    b->dx = -b->dx;
+  }
+  if (bx + r >= SCREEN_W - 2) {
+    b->x = (SCREEN_W - 2 - r) << 8;
+    b->dx = -b->dx;
+  }
+  if (by - r <= 21) {
+    b->y = (21 + r) << 8;
+    b->dy = -b->dy;
+  }
+}
+
+void handle_paddle_collision(Ball *b) {
+  int bx = b->x >> 8, by = b->y >> 8, r = b->radius;
+  int speed, offset;
+
+  if (b->dy > 0 && by + r >= PADDLE_Y && by + r <= PADDLE_Y + PADDLE_H &&
+      bx >= paddle.x - 2 && bx <= paddle.x + paddle.width + 2) {
+    b->y = (PADDLE_Y - r) << 8;
+    speed = get_ball_speed();
+    offset = bx - paddle.x - paddle.width / 2;
+    b->dx = (offset * speed * 2) / paddle.width;
+    if (b->dx > speed)
+      b->dx = speed;
+    if (b->dx < -speed)
+      b->dx = -speed;
+    b->dy = -speed;
+  }
+}
+
+void handle_brick_collision(Ball *b) {
+  int bx = b->x >> 8, by = b->y >> 8, r = b->radius;
+  int row, col, hp, brick_x, brick_y, ol, oR, ot, ob, minX, minY, flags;
+  PowerUpType pt;
+
+  for (row = 0; row < BRICK_ROWS; row++) {
+    for (col = 0; col < BRICK_COLS; col++) {
+      hp = bricks[row][col] & 0x7F;
+      if (hp <= 0)
+        continue;
+
+      brick_x = BRICK_OFFSET_X + col * (BRICK_W + BRICK_GAP);
+      brick_y = BRICK_OFFSET_Y + row * (BRICK_H + BRICK_GAP);
+
+      if (bx + r >= brick_x && bx - r <= brick_x + BRICK_W &&
+          by + r >= brick_y && by - r <= brick_y + BRICK_H) {
+        ol = (bx + r) - brick_x;
+        oR = (brick_x + BRICK_W) - (bx - r);
+        ot = (by + r) - brick_y;
+        ob = (brick_y + BRICK_H) - (by - r);
+        minX = (ol < oR) ? ol : oR;
+        minY = (ot < ob) ? ot : ob;
+
+        if (minX < minY)
+          b->dx = -b->dx;
+        else
+          b->dy = -b->dy;
+
+        flags = bricks[row][col] & HAS_POWERUP;
+        hp--;
+        if (hp <= 0) {
+          bricks[row][col] = 0;
+          score += (BRICK_ROWS - row) * 10;
+          if (flags) {
+            pt = (PowerUpType)((pseudo_rand() % 2) + 1);
+            spawn_powerup(brick_x + BRICK_W / 2, brick_y + BRICK_H, pt);
+          }
+        } else {
+          bricks[row][col] = hp | flags;
+        }
+        return;
+      }
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * POWER-UPS
+ * ═══════════════════════════════════════════════════════════════ */
+void spawn_powerup(int bx, int by, PowerUpType type) {
+  int i;
+  for (i = 0; i < MAX_POWERUPS; i++) {
+    if (!powerups[i].active) {
+      powerups[i].x = bx - POWERUP_W / 2;
+      powerups[i].y = by;
+      powerups[i].type = type;
+      powerups[i].active = true;
+      return;
+    }
+  }
+}
+
+void update_powerups(void) {
+  int i;
+  for (i = 0; i < MAX_POWERUPS; i++) {
+    if (!powerups[i].active)
+      continue;
+    powerups[i].y += POWERUP_SPEED;
+    if (powerups[i].y + POWERUP_H >= PADDLE_Y &&
+        powerups[i].y <= PADDLE_Y + PADDLE_H &&
+        powerups[i].x + POWERUP_W >= paddle.x &&
+        powerups[i].x <= paddle.x + paddle.width) {
+      apply_powerup(powerups[i].type);
+      powerups[i].active = false;
+    } else if (powerups[i].y > SCREEN_H) {
+      powerups[i].active = false;
+    }
+  }
+}
+
+void draw_powerups(void) {
+  int i;
+  short int color;
+  char label;
+
+  for (i = 0; i < MAX_POWERUPS; i++) {
+    if (!powerups[i].active)
+      continue;
+    color = (powerups[i].type == PU_WIDE) ? GREEN : CYAN;
+    label = (powerups[i].type == PU_WIDE) ? 'W' : 'M';
+    draw_box(powerups[i].x, powerups[i].y, POWERUP_W, POWERUP_H, color);
+    draw_line(powerups[i].x, powerups[i].y, powerups[i].x + POWERUP_W - 1,
+              powerups[i].y, BLACK);
+    draw_line(powerups[i].x, powerups[i].y + POWERUP_H - 1,
+              powerups[i].x + POWERUP_W - 1, powerups[i].y + POWERUP_H - 1,
+              BLACK);
+    draw_char_at(powerups[i].x + 3, powerups[i].y + 1, label, BLACK);
+  }
+}
+
+void erase_old_powerups(void) {
+  int i;
+  for (i = 0; i < MAX_POWERUPS; i++)
+    if (old_powerups[i].active)
+      draw_box(old_powerups[i].x, old_powerups[i].y, POWERUP_W, POWERUP_H,
+               DARKBG);
+}
+
+void apply_powerup(PowerUpType type) {
+  int i, added, speed;
+
+  if (type == PU_WIDE) {
+    paddle.width = PADDLE_W_WIDE;
+    wide_timer = 500;
+  } else if (type == PU_MULTI) {
+    added = 0;
+    for (i = 1; i < MAX_BALLS && added < 2; i++) {
+      if (!balls[i].active) {
+        balls[i].active = true;
+        balls[i].launched = true;
+        balls[i].radius = balls[0].radius;
+        balls[i].x = balls[0].x;
+        balls[i].y = balls[0].y;
+        speed = get_ball_speed();
+        balls[i].dx = (added == 0) ? -speed : speed;
+        balls[i].dy = -speed;
+        added++;
+      }
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * INPUT
+ * ═══════════════════════════════════════════════════════════════ */
+static int prev_key = 0;
+
+void read_keys(void) {
+  int kv = *KEY_ptr;
+  int key_pressed = kv & ~prev_key;
+  int speed;
+  prev_key = kv;
+
+  /* KEY0 – Move paddle RIGHT */
+  if (key_pressed & 0x1) {
+    paddle.x += paddle.width;
+    if (paddle.x + paddle.width > SCREEN_W - 2)
+      paddle.x = SCREEN_W - 2 - paddle.width;
+  }
+
+  /* KEY1 – Move paddle LEFT */
+  if (key_pressed & 0x2) {
+    paddle.x -= paddle.width;
+    if (paddle.x < 2)
+      paddle.x = 2;
+  }
+
+  /* KEY2 – Launch ball */
+  if (key_pressed & 0x4) {
+    if (ball_on_paddle) {
+      speed = get_ball_speed();
+      balls[0].launched = true;
+      balls[0].dx = (pseudo_rand() % 2 == 0) ? (speed / 2) : -(speed / 2);
+      balls[0].dy = -speed;
+      ball_on_paddle = false;
+    }
+  }
+
+  /* KEY3 – Restart */
+  if (key_pressed & 0x8) {
+    update_leaderboard(score);
+    show_start_screen();
+    init_game();
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * HEX DISPLAY
+ * ═══════════════════════════════════════════════════════════════ */
+void update_hex_display(void) {
+  *HEX3_0_ptr = seg7[level % 10] | (seg7[(level / 10) % 10] << 8) |
+                (seg7[16] << 16) | (seg7[score % 10] << 24);
+  *HEX5_4_ptr = seg7[(score / 10) % 10] | (seg7[(score / 100) % 10] << 8);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * LEVEL / GAME-OVER
+ * ═══════════════════════════════════════════════════════════════ */
+bool all_bricks_destroyed(void) {
+  int r, c;
+  for (r = 0; r < BRICK_ROWS; r++)
+    for (c = 0; c < BRICK_COLS; c++)
+      if ((bricks[r][c] & 0x7F) > 0)
+        return false;
+  return true;
+}
+
+void next_level(void) {
+  volatile int *pixel_ctrl = (int *)0xFF203020;
+  int i, buf;
+  volatile int d;
+
+  level++;
+  ball_on_paddle = true;
+  wide_timer = 0;
+  paddle.width = PADDLE_W_DEFAULT;
+
+  for (i = 0; i < MAX_POWERUPS; i++)
+    powerups[i].active = false;
+
+  init_bricks();
+  reset_balls();
+
+  /* Level announcement on both buffers */
+  for (buf = 0; buf < 2; buf++) {
+    clear_screen(DARKBG);
+    draw_background();
+    draw_string_at(120, 110, "LEVEL", GOLD);
+    draw_digit_at(158, 110, level % 10, GOLD);
+    if (level >= 10)
+      draw_digit_at(152, 110, (level / 10) % 10, GOLD);
+    wait_for_vsync();
+    pixel_buffer_start = *(pixel_ctrl + 1);
+  }
+
+  for (d = 0; d < 2000000; d++)
+    ;
+
+  /* Game scene on both buffers */
+  draw_full_scene();
+  wait_for_vsync();
+  pixel_buffer_start = *(pixel_ctrl + 1);
+  draw_full_scene();
+
+  save_old_state();
+}
+
+static void draw_game_over_contents(void) {
+  clear_screen(DARKBG);
+  draw_string_at(112, 80, "GAME OVER", RED);
+  draw_string_at(115, 100, "SCORE:", LGRAY);
+  draw_score_5digits(160, 100, score, WHITE);
+}
+
+void show_game_over(void) {
+  volatile int d;
+  draw_on_both_buffers(draw_game_over_contents);
+  for (d = 0; d < 3000000; d++)
+    ;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * LEADERBOARD
+ * ═══════════════════════════════════════════════════════════════ */
+void update_leaderboard(int new_score) {
+  int i, j;
+  for (i = 0; i < LEADERBOARD_SIZE; i++) {
+    if (new_score > leaderboard[i].score) {
+      for (j = LEADERBOARD_SIZE - 1; j > i; j--)
+        leaderboard[j] = leaderboard[j - 1];
+      leaderboard[i].score = new_score;
+      return;
+    }
+  }
+}
+
+void show_leaderboard_screen(void) {
+  int i, y;
+  short int clr;
+
+  draw_string_at(100, 125, "LEADERBOARD", GOLD);
+  draw_line(100, 134, 210, 134, DGRAY);
+
+  for (i = 0; i < LEADERBOARD_SIZE; i++) {
+    y = 140 + i * 14;
+    clr = (i == 0) ? GOLD : WHITE;
+    draw_char_at(108, y, '#', LGRAY);
+    draw_digit_at(115, y, i + 1, LGRAY);
+    draw_char_at(124, y, ':', LGRAY);
+    draw_score_5digits(134, y, leaderboard[i].score, clr);
+  }
+
+  draw_string_at(90, 200, "PRESS KEY3 TO PLAY", LGRAY);
+}
