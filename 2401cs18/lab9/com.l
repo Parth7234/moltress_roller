@@ -1,3 +1,6 @@
+/* Compile: flex com.l && gcc lex.yy.c -o com -lfl */
+/* Run with the sample input: ./com input.c */
+
 /* 
  * Name: Parth Singla
  * Roll Number: 2401CS18

@@ -1,4 +1,6 @@
-/*
+/* Compile: bison -d com.y && gcc com.tab.c -o com */
+
+/* 
  * Name: Parth Singla
  * Roll Number: 2401CS18
  */

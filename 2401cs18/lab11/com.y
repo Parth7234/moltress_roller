@@ -1,3 +1,5 @@
+/* Compile: bison -d com.y && gcc com.tab.c -o com */
+
 %{
 /*
  * Name: Parth Singla
@@ -155,7 +157,7 @@ int main(void) {
      * The error_flag ensures that programs with syntax errors are never reported as successfully parsed[cite: 40].
      */
     if (yyparse() == 0 && error_flag == 0) {
-        printf("Input is syntactically valid.\n");[cite: 39]
+        printf("Input is syntactically valid.\n");
     }
     return 0;
 }

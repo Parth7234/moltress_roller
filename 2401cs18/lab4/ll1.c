@@ -1,3 +1,5 @@
+// Compile: gcc ll1.c -o ll1
+
 // Name: Parth Singla
 // Roll Number: 2401CS18
 

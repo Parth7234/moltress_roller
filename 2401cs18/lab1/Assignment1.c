@@ -1,3 +1,5 @@
+// Compile: gcc Assignment1.c -o Assignment1
+
 // Name: Parth Singla
 // Roll Number: 2401CS18
 

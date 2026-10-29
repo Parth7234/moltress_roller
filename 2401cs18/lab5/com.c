@@ -1,3 +1,6 @@
+// Compile: gcc com.c -o com
+// Run with the sample input: ./com < input.txt
+
 // Name: Parth Singla
 // Roll Number: 2401CS18
 

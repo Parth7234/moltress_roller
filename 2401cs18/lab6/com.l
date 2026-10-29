@@ -1,3 +1,6 @@
+/* Compile: flex com.l && gcc lex.yy.c -o com -lfl */
+/* Run with the sample input: ./com < input.c */
+
 %{
 /*
  * Name: Parth Singla
@@ -38,7 +41,7 @@ int has_error = 0;
     /* When "/*" is seen, switch the lexer into the MULTI_COMMENT state. */
 "/*"                    { BEGIN(MULTI_COMMENT); }
 
-    /* When "*/" is seen INSIDE a multi-line comment, increment the counter and return to the normal state[cite: 18]. */
+    /* When the multi-line comment terminator is seen, increment the counter and return to the normal state[cite: 18]. */
 <MULTI_COMMENT>"*/"     { multi_comments++; BEGIN(INITIAL); }
 
     /* Track line numbers accurately even when inside a massive block comment[cite: 18]. */

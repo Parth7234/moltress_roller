@@ -1,7 +1,11 @@
+/* Compile: flex Lab7.l && gcc lex.yy.c -o lab7 -lfl */
+
 /*
  * Name: Parth Singla
  * Roll Number: 2401CS18
  */
+
+%option yylineno
 
 %{
 /* 
@@ -17,7 +21,6 @@
  * Enable Flex's built-in line number tracking[cite: 47]. 
  * Yylineno automatically increments on newlines and is globally accessible.
  */
-%option yylineno
 
 /* 
  * Symbol Table Definition[cite: 46, 47]

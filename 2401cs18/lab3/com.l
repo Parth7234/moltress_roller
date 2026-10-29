@@ -1,3 +1,6 @@
+/* Compile: flex com.l && gcc lex.yy.c -o com -lfl */
+/* Run with the sample inputs: ./com < input.c  or  ./com < input2.c */
+
 %{
 /* Name: Parth Singla */
 /* Roll Number: 2401CS18 */
@@ -33,10 +36,10 @@
        The action is empty {}, meaning the matched text is silently consumed and discarded[cite: 4, 5]. */
 "//"([^\n])*             { }
 
-    /* Multi-line comments: When "/*" is encountered, switch from the default state to the COMMENT state[cite: 5]. */
+    /* Multi-line comments: When the opening comment delimiter is encountered, switch to the COMMENT state[cite: 5]. */
 "/*"                     { BEGIN(COMMENT); }
 
-    /* While inside the <COMMENT> state, if we see "*/", switch back to the INITIAL (default) state[cite: 5]. */
+    /* Inside the COMMENT state, the closing comment delimiter switches back to the INITIAL state[cite: 5]. */
 <COMMENT>"*/"            { BEGIN(INITIAL); }
 
     /* While inside the <COMMENT> state, consume newlines. This ensures multi-line comments spanning 
